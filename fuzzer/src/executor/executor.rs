@@ -11,7 +11,10 @@ use std::{
     collections::HashMap,
     path::Path,
     process::{Command, Stdio},
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{compiler_fence, Ordering},
+        Arc, RwLock,
+    },
     time,
 };
 use wait_timeout::ChildExt;
@@ -46,6 +49,14 @@ impl Executor {
         // ** Envs **
         let mut envs = HashMap::new();
         envs.insert(
+            defs::ASAN_OPTIONS_VAR.to_string(),
+            defs::ASAN_OPTIONS_CONTENT.to_string(),
+        );
+        envs.insert(
+            defs::MSAN_OPTIONS_VAR.to_string(),
+            defs::MSAN_OPTIONS_CONTENT.to_string(),
+        );
+        envs.insert(
             defs::BRANCHES_SHM_ENV_VAR.to_string(),
             branches.get_id().to_string(),
         );
@@ -65,6 +76,7 @@ impl Executor {
             &envs,
             fd.as_raw_fd(),
             cmd.is_stdin,
+            cmd.uses_asan,
             cmd.time_limit,
             cmd.mem_limit,
         ));
@@ -97,6 +109,7 @@ impl Executor {
             &self.envs,
             self.fd.as_raw_fd(),
             self.cmd.is_stdin,
+            self.cmd.uses_asan,
             self.cmd.time_limit,
             self.cmd.mem_limit,
         );
@@ -188,10 +201,10 @@ impl Executor {
         if self.cmd.is_stdin {
             self.fd.rewind();
         }
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
         let unmem_status =
             self.run_target(&self.cmd.main, config::MEM_LIMIT_TRACK, self.cmd.time_limit);
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
 
         // find difference
         if unmem_status != StatusType::Normal {
@@ -292,13 +305,13 @@ impl Executor {
 
         self.branches.clear_trace();
 
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
         let ret_status = if let Some(ref mut fs) = self.forksrv {
             fs.run()
         } else {
             self.run_target(&self.cmd.main, self.cmd.mem_limit, self.cmd.time_limit)
         };
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
 
         ret_status
     }
@@ -334,13 +347,13 @@ impl Executor {
 
         self.write_test(buf);
 
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
         let ret_status = self.run_target(
             &self.cmd.track,
             config::MEM_LIMIT_TRACK,
             self.cmd.time_limit * config::TIME_LIMIT_TRACK,
         );
-        unsafe { asm!("" ::: "memory" : "volatile") };
+        compiler_fence(Ordering::SeqCst);
 
         if ret_status != StatusType::Normal {
             error!(
@@ -396,20 +409,23 @@ impl Executor {
         let timeout = time::Duration::from_secs(time_limit);
         let ret = match child.wait_timeout(timeout).unwrap() {
             Some(status) => {
-                if status.unix_signal().is_some() {
-                    debug!("Crash code: {:?}", status);
-                    StatusType::Crash
+                if let Some(status_code) = status.code() {
+                    if self.cmd.uses_asan && status_code == defs::MSAN_ERROR_CODE {
+                        StatusType::Crash
+                    } else {
+                        StatusType::Normal
+                    }
                 } else {
-                    StatusType::Normal
+                    StatusType::Crash
                 }
-            },
+            }
             None => {
                 // Timeout
                 // child hasn't exited yet
                 child.kill().expect("Could not send kill signal to child.");
-                child.wait().expect("Error during wating for child.");
+                child.wait().expect("Error during waiting for child.");
                 StatusType::Timeout
-            },
+            }
         };
         ret
     }

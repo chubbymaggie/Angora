@@ -63,13 +63,14 @@ public:
   unsigned long int RandSeed = 1;
   bool is_bc;
 
-  // Const Varibales
+  // Const Variables
   DenseSet<u32> UniqCidSet;
 
   // Configurations
   bool enable_ctx;
   bool gen_id_random;
   bool output_cond_loc;
+  bool direct_fn_ctx;
 
   MDNode *ColdCallWeights;
 
@@ -96,6 +97,13 @@ public:
   Constant *TraceSwTT;
   Constant *TraceFnTT;
   Constant *TraceExploitTT;
+
+  FunctionType * TraceCmpTy;
+  FunctionType * TraceSwTy;
+  FunctionType * TraceCmpTtTy;
+  FunctionType * TraceSwTtTy;
+  FunctionType * TraceFnTtTy;
+  FunctionType * TraceExploitTtTy;
 
   // Custom setting
   AngoraABIList ABIList;
@@ -235,30 +243,37 @@ void AngoraLLVMPass::initVariables(Module &M) {
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__angora_area_ptr");
   AngoraCondId =
-      new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
-                         ConstantInt::get(Int32Ty, 0), "__angora_cond_cmpid");
-  AngoraPrevLoc =
-      new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
-                         ConstantInt::get(Int32Ty, 0), "__angora_prev_loc", 0,
-                         GlobalVariable::GeneralDynamicTLSModel, 0, false);
-  AngoraContext =
-      new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
-                         ConstantInt::get(Int32Ty, 0), "__angora_context", 0,
-                         GlobalVariable::GeneralDynamicTLSModel, 0, false);
-  AngoraLevel =
-      new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
-                         ConstantInt::get(Int32Ty, 0), "__angora_level", 0,
-                         GlobalVariable::GeneralDynamicTLSModel, 0, false);
+      new GlobalVariable(M, Int32Ty, false, GlobalValue::ExternalLinkage, 0,
+                         "__angora_cond_cmpid");
+  AngoraPrevLoc = new GlobalVariable(
+      M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__angora_prev_loc",
+      0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
+  AngoraContext = new GlobalVariable(
+      M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__angora_context", 0,
+      GlobalVariable::GeneralDynamicTLSModel, 0, false);
+  AngoraLevel = new GlobalVariable(
+      M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__angora_level", 0,
+      GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
   if (CompileType == CLANG_FAST_TYPE) {
+    /*
     TraceCmp = M.getOrInsertFunction("__angora_trace_cmp", Int32Ty, Int32Ty,
                                      Int32Ty, Int64Ty, Int64Ty, nullptr);
 
     TraceSw = M.getOrInsertFunction("__angora_trace_switch", Int64Ty, Int32Ty,
                                     Int64Ty, nullptr);
+    */
+    Type * TraceCmpArgs[4] = {Int32Ty, Int32Ty, Int64Ty, Int64Ty};
+    TraceCmpTy = FunctionType::get(Int32Ty, TraceCmpArgs, false);
+    TraceCmp = M.getOrInsertFunction("__angora_trace_cmp", TraceCmpTy);
+
+    Type * TraceSwArgs[2] = {Int32Ty, Int64Ty};
+    TraceSwTy = FunctionType::get(Int64Ty, TraceSwArgs, false);
+    TraceSw = M.getOrInsertFunction("__angora_trace_switch", TraceSwTy);
   }
 
   if (CompileType == CLANG_TRACK_TYPE) {
+    /*
     TraceCmpTT =
         M.getOrInsertFunction("__angora_trace_cmp_tt", VoidTy, Int32Ty, Int32Ty,
                               Int32Ty, Int32Ty, Int64Ty, Int64Ty, nullptr);
@@ -273,6 +288,22 @@ void AngoraLLVMPass::initVariables(Module &M) {
     TraceExploitTT =
         M.getOrInsertFunction("__angora_trace_exploit_val_tt", VoidTy, Int32Ty,
                               Int32Ty, Int32Ty, Int64Ty, nullptr);
+    */
+    Type * TraceCmpTtArgs[6] = {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int64Ty, Int64Ty};
+    TraceCmpTtTy = FunctionType::get(VoidTy, TraceCmpTtArgs, false);
+    TraceCmpTT = M.getOrInsertFunction("__angora_trace_cmp_tt", TraceCmpTtTy);
+
+    Type * TraceSwTtArgs[5] = {Int32Ty, Int32Ty, Int64Ty, Int32Ty, Int64PtrTy};
+    TraceSwTtTy = FunctionType::get(VoidTy, TraceSwTtArgs, false);
+    TraceSwTT = M.getOrInsertFunction("__angora_trace_switch_tt", TraceSwTtTy);
+
+    Type * TraceFnTtArgs[4] = {Int32Ty, Int32Ty, Int8PtrTy, Int8PtrTy};
+    TraceFnTtTy = FunctionType::get(VoidTy, TraceFnTtArgs, false);
+    TraceFnTT = M.getOrInsertFunction("__angora_trace_fn_tt", TraceFnTtTy);
+
+    Type * TraceExploitTtArgs[4] = {Int32Ty, Int32Ty, Int32Ty, Int64Ty};
+    TraceExploitTtTy = FunctionType::get(VoidTy, TraceExploitTtArgs, false);
+    TraceExploitTT = M.getOrInsertFunction("__angora_trace_exploit_val_tt", TraceExploitTtTy);
   }
 
   std::vector<std::string> AllABIListFiles;
@@ -287,11 +318,16 @@ void AngoraLLVMPass::initVariables(Module &M) {
   ExploitList.set(SpecialCaseList::createOrDie(AllExploitListFiles));
 
   enable_ctx = !getenv(DISABLE_CTX_VAR);
+  direct_fn_ctx = getenv(DIRECT_FN_CTX);
   gen_id_random = !!getenv(GEN_ID_RANDOM_VAR);
   output_cond_loc = !!getenv(OUTPUT_COND_LOC_VAR);
 
   if (!enable_ctx) {
     errs() << "disable context\n";
+  }
+
+  if (direct_fn_ctx) {
+    errs() << "use direct function call context\n";
   }
 
   if (gen_id_random) {
@@ -433,8 +469,13 @@ void AngoraLLVMPass::visitCallInst(Instruction *Inst) {
     // by `xor` with the same value.
     LoadInst *CtxVal = IRB.CreateLoad(AngoraContext);
     setInsNonSan(CtxVal);
-    Value *UpdatedCtx = IRB.CreateXor(CtxVal, SelectRet);
-    setValueNonSan(UpdatedCtx);
+    Value *UpdatedCtx = SelectRet;
+    if (!direct_fn_ctx) {
+      // Implementation of function context for AFL by heiko eissfeldt:
+      // https://github.com/vanhauser-thc/afl-patches/blob/master/afl-fuzz-context_sensitive.diff
+      UpdatedCtx = IRB.CreateXor(CtxVal, SelectRet);
+      setValueNonSan(UpdatedCtx);
+    }
     StoreInst *SaveCtx = IRB.CreateStore(UpdatedCtx, AngoraContext);
     setInsNonSan(SaveCtx);
     StoreInst *StoreCtx = new StoreInst(CtxVal, AngoraContext);
@@ -821,7 +862,9 @@ static void registerAngoraLLVMPass(const PassManagerBuilder &,
   PM.add(new AngoraLLVMPass());
 }
 
-static RegisterPass<AngoraLLVMPass> X("angora_llvm_pass", "Angora LLVM Pass");
+static RegisterPass<AngoraLLVMPass> X("angora_llvm_pass", "Angora LLVM Pass",
+                                              false,
+                                              false);
 
 static RegisterStandardPasses
     RegisterAngoraLLVMPass(PassManagerBuilder::EP_OptimizerLast,

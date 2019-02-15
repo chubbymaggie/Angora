@@ -17,7 +17,7 @@ Arxiv: [Angora: Efficient Fuzzing by Principled Search](https://arxiv.org/abs/18
 ### Build Requirements
 
 - Linux-amd64 (Tested on Ubuntu 16.04/18.04 and Debian Buster)
-- Rust nightly, can be obtained using [rustup](https://rustup.rs)
+- Rust stable, can be obtained using [rustup](https://rustup.rs)
 - [LLVM 4.0.0](http://llvm.org/docs/index.html) : run `PREFIX=/path-to-install ./build/llvm.sh`.
 
 ### Environment Variables
@@ -78,6 +78,8 @@ make install
 
 ```
 
+If you fail to build by this approach, try `wllvm` and `gllvm` described in [Build a target program](./docs/build_target.md#wllvm-or-gllvm).
+
 
 ### Fuzzing
 
@@ -95,7 +97,12 @@ For more information, please refer to the documentation under the
 - [Running Angora](./docs/running.md)
 - [Example - Fuzz program file by Angora](./docs/example.md)
 - [Run Angora on LAVA](./docs/lava.md)
+- [Exploit attack points](./docs/exploitation.md)
+- [Usage](./docs/usage.md)
 - [Configuration Files](./docs/configuration.md)
 - [Environment variables in compiling](./docs/environment_variables.md)
-- [Troubleshoot](./docs/troubleshoot.md)
 - [UI Terminology](./docs/ui.md)
+- [Troubleshoot](./docs/troubleshoot.md)
+
+--------
+Angora is maintained by [ByteDance AI Lab](https://ailab.bytedance.com/) now.

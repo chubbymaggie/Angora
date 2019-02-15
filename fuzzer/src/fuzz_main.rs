@@ -66,7 +66,7 @@ pub fn fuzz_main(
     depot::sync_depot(&mut executor, running.clone(), &depot.dirs.seeds_dir);
 
     if depot.empty() {
-        error!("Failed to find any branches during dry run.\nPlease ensure that the binary has been instrumented and/or input directory is populated.");
+        error!("Failed to find any branches during dry run.\nPlease ensure that the binary has been instrumented and/or input directory is populated. \nPlease ensure that seed directory - {:?} has any file.", depot.dirs.seeds_dir);
         panic!();
     }
 
@@ -84,7 +84,7 @@ pub fn fuzz_main(
         Err(e) => {
             error!("FATAL: Could not create log file: {:?}", e);
             panic!();
-        },
+        }
     };
     main_thread_sync_and_log(
         log_file,
@@ -111,7 +111,7 @@ pub fn fuzz_main(
 }
 
 fn initialize_directories(in_dir: &str, out_dir: &str, sync_afl: bool) -> PathBuf {
-    let mut angora_out_dir = if sync_afl {
+    let angora_out_dir = if sync_afl {
         gen_path_afl(out_dir)
     } else {
         PathBuf::from(out_dir)
@@ -119,20 +119,9 @@ fn initialize_directories(in_dir: &str, out_dir: &str, sync_afl: bool) -> PathBu
 
     let restart = in_dir == "-";
     if !restart {
-        if fs::create_dir(&angora_out_dir).is_err() {
-            let mut dir_postfix: usize = 1;
-            let mut new_dir;
-            // Ugly do-while style loop
-            while {
-                new_dir = angora_out_dir.clone();
-                new_dir.set_extension(dir_postfix.to_string());
-                dir_postfix += 1;
-                fs::create_dir(&new_dir).is_err()
-            } {}
-            angora_out_dir = new_dir;
-            warn!("output directory is {:?}", angora_out_dir);
-        }
+        fs::create_dir(&angora_out_dir).expect("Output directory has existed!");
     }
+
     angora_out_dir
 }
 
@@ -162,7 +151,7 @@ fn create_stats_file_and_write_pid(angora_out_dir: &PathBuf) -> PathBuf {
         Err(e) => {
             error!("Could not create stats file: {:?}", e);
             panic!();
-        },
+        }
     };
     write!(buffer, "fuzzer_pid : {}", pid).expect("Could not write to stats file");
     fuzzer_stats
@@ -180,6 +169,12 @@ fn init_cpus_and_run_fuzzing_threads(
     let mut handlers = vec![];
     let free_cpus = bind_cpu::find_free_cpus(num_jobs);
     let free_cpus_len = free_cpus.len();
+    let bind_cpus = if free_cpus_len < num_jobs {
+        warn!("The number of free cpus is less than the number of jobs. Will not bind any thread to any cpu.");
+        false
+    } else {
+        true
+    };
     for thread_id in 0..num_jobs {
         let c = child_count.clone();
         let r = running.clone();
@@ -187,10 +182,10 @@ fn init_cpus_and_run_fuzzing_threads(
         let d = depot.clone();
         let b = global_branches.clone();
         let s = stats.clone();
-        let cid = free_cpus[thread_id];
+        let cid = if bind_cpus { free_cpus[thread_id] } else { 0 };
         let handler = thread::spawn(move || {
             c.fetch_add(1, Ordering::SeqCst);
-            if free_cpus_len > thread_id {
+            if bind_cpus {
                 bind_cpu::bind_thread_to_cpu_core(cid);
             }
             fuzz_loop::fuzz_loop(r, cmd, d, b, s);
